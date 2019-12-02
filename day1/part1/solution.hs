@@ -1,12 +1,4 @@
-import System.IO
 import System.Environment
-
-
-
-
-
-
-
 
 parseWeights :: String -> [Int]
 parseWeights str = 
@@ -22,4 +14,3 @@ main = do
   let weights = parseWeights contents
   let fuels = map calcFuel weights
   print (sum fuels)
-  
