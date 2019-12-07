@@ -1,3 +1,4 @@
-solution
-solution.hi
-solution.o
+solution*
+*.hi
+*.o
+!solution*.hs
