@@ -79,7 +79,7 @@ main = do
   contents <- readFile fileName
   let asteroids = extractAsteroids contents
 
-  let station = fst . head . reverse $ sortBy (comparing [snd]) $ countVisible asteroids
+  let station = fst $ maximumBy (comparing [snd]) $ countVisible asteroids
   let target = destructionOrder station asteroids !! 199 --zero based indexing
   
   print $ (x target) * 100 + (y target)
