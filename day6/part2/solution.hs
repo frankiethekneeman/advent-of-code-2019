@@ -57,17 +57,19 @@ depthTo depth target (Body name satellites)
   | otherwise = depthTo (depth + 1) target =<< (find (hasBody target) satellites)
 
 calculateAssistsHelper :: Body -> Body -> Maybe Int
-calculateAssistsHelper (Just santa) (Just me)
+calculateAssistsHelper santa me
   | (name santa) == (name me) = calculateAssists santa
   | otherwise = (+) <$> (depthTo 0 "SAN" santa) <*> (depthTo 0 "YOU" me)
-calculateAssistsHelper lhs rhs = Nothing
 
 calculateAssists :: Body -> Maybe Int
 calculateAssists (Body _ [sat]) = calculateAssists sat
 calculateAssists (Body _ satellites) =
   let santa = find (hasBody "SAN") satellites
       me = find (hasBody "YOU") satellites
-    in calculateAssistsHelper <$> santa <*> me
+      assists = calculateAssistsHelper <$> santa <*> me
+    in case assists of
+        Just m -> m
+        otherwise -> Nothing
 
 
 main = do
