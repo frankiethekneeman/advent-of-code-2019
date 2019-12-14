@@ -74,10 +74,25 @@ unapplyAll recipe quantities =
       flat = map (foldl1 (\(l, name) (r, _) -> (l + r, name))) grouped
     in flat
 
+oreNeeded :: Int -> [Recipe] -> Int
+oreNeeded n expansions =
+  fst.head $ foldl (flip unapplyAll) [(n, "FUEL")] expansions
+
+oreInHold = 1000000000000
+maxOre :: Int -> Int -> [Recipe] -> Int
+maxOre l r expansions
+  | l + 1 == r = l
+  | otherwise =
+    let candidate = (l + r) `quot` 2
+        ore = oreNeeded candidate expansions
+      in if ore > oreInHold
+        then maxOre l candidate expansions
+        else maxOre candidate r expansions
+
 main = do
   args <- getArgs
   let fileName = head args
   contents <- readFile fileName
   let recipes = map parseRecipe $ lines contents
   let expansions = reverse $ creationSort (Set.singleton "ORE") recipes
-  print $ fst.head $ foldl (flip unapplyAll) [(1, "FUEL")] expansions
+  print $ maxOre 1 oreInHold expansions
