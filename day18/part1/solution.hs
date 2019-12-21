@@ -1,8 +1,9 @@
 import System.Environment
 import Data.Array
 import Data.Char
-import qualified Data.Set as Set
 import Data.List
+import qualified Data.Set as Set
+import qualified Data.Map.Strict as Map
 import Debug.Trace
 
 data Tile = Wall | Open | Entrance | Key Char | Door Char deriving (Eq, Show, Ord)
@@ -10,6 +11,13 @@ data Tile = Wall | Open | Entrance | Key Char | Door Char deriving (Eq, Show, Or
 isKey :: Tile -> Bool
 isKey (Key _) = True
 isKey _ = False
+
+isDoor :: Tile -> Bool
+isDoor (Door _) = True
+isDoor _ = False
+
+keyOf :: Tile -> Tile
+keyOf (Door d) = Key (toLower d)
 
 toTile :: Char -> Tile
 toTile '#' = Wall
@@ -33,68 +41,105 @@ deref (x, y) m
   where (minX, maxX) = bounds $ m ! 0
         (minY, maxY) = bounds $ m
 
-passable :: Tile -> Set.Set Tile -> Bool
-passable Wall _ = False
-passable (Door d) seen = (Key (toLower d)) `Set.member` seen
-passable _ _ = True
+passable :: Tile -> Bool
+passable Wall = False
+passable _ = True
 
-obtainableKeys :: [Path] -> [Path] -> Set.Set Tile -> Set.Set Point -> Maze -> [Path]
-obtainableKeys found [] _ _ _ = reverse found
-obtainableKeys found (curr:rest) obtainedKeys seen maze = 
-  if isKey currTile && Set.notMember currTile obtainedKeys
-    then obtainableKeys (curr:found) rest obtainedKeys seen maze
-    else obtainableKeys found rest' obtainedKeys seen' maze
-  where (x, y) = head curr
-        currTile = maze ! y ! x
+bfs :: Point -> [Path] -> Set.Set Point -> Maze -> Path
+bfs t ((curr:prev):others) seen maze
+  | t == curr = curr:prev
+  | otherwise = bfs t others' seen' maze
+  where (x, y) = curr
         possibleNext =  [(x + dx, y + dy) | dx <- [-1..1], dy <- [-1..1], abs dx + abs dy == 1]
-        next = filter ((`passable` obtainedKeys) . (`deref` maze)) $ filter (`Set.notMember` seen) possibleNext
+        next = filter (passable . (`deref` maze)) $ filter (`Set.notMember` seen) possibleNext
         seen' = foldl (flip Set.insert) seen next
-        rest' = rest ++ map (:curr) next
+        others' = others ++ map (:curr:prev) next
 
-data Route = Route {
-  path :: Path
-  , keys :: Set.Set Tile
+data Segment = Segment {
+   len :: Int
+   , keysNeeded :: Set.Set Tile
+   , keysAlong :: Set.Set Tile
 } deriving (Show)
 
-extend :: Route -> Path -> Maze -> Route
-extend (Route path obtained) cont maze = 
-  let end = head cont
-      obtained' = Set.insert (deref end maze) obtained
-      path' = cont ++ path
-    in Route path' obtained'
+findSegment :: Point -> Point -> Maze -> Segment
+findSegment start end maze = 
+  let path = tail $ reverse $ map (`deref` maze) $ bfs end [[start]] (Set.singleton start) maze
+      keysNeeded = map keyOf $ filter isDoor path
+      keysAlong = filter isKey $ path
+      keysAndDoors = zip [0..] $ filter (\t -> isKey t || isDoor t) path
+      keysPickedUpThenUsed = [ key
+        | (k, key) <- keysAndDoors
+        , (d, door) <- keysAndDoors
+        , k < d
+        , isDoor door
+        , key == keyOf door ]
+      keysNeeded' = filter (not.(`elem` keysPickedUpThenUsed)) keysNeeded
+    in Segment (length path) (Set.fromList keysNeeded') (Set.fromList keysAlong)
 
-merge :: [Route] -> [Route] -> [Route]
-merge [] [] = []
-merge l [] = l
-merge [] r = r
-merge (l:lest) (r:rest)
-  | length (path l) > length (path r) = r:(merge (l:lest) rest)
-  | otherwise = l:(merge lest (r:rest))
+interesting :: Tile -> Bool
+interesting Entrance = True
+interesting (Key _) = True
+interesting _ = False
 
-paths :: [Route] -> Maze -> Route
-paths [] _ = Route [] Set.empty
-paths (curr:rest) maze 
-  -- | trace (show curr) False = undefined
-  | continuations == [] = curr
-  | otherwise = paths rest' maze
-  where (Route p obtained) = curr
-        startPos = head p
-        startTile = deref startPos maze
-        obtained' = if isKey startTile then Set.insert startTile obtained else obtained
-        continuations = map init $ obtainableKeys [] [[ startPos ]] obtained' (Set.singleton startPos) maze
-        futures = map (\c -> extend curr c maze) continuations
-        rest' = merge rest futures
+type Graph = Map.Map Tile (Map.Map Tile Segment)
 
-        
+data Route = Route {
+    l :: Int
+    , keysObtained :: Set.Set Tile
+    , position :: Tile
+} deriving (Show)
+
+canTravel :: Set.Set Tile -> Segment -> Bool
+canTravel keysObtained (Segment _ keysNeeded _ ) = keysNeeded `Set.isSubsetOf` keysObtained
+
+withoutKeys :: Ord a => Map.Map a b -> Set.Set a -> Map.Map a b
+withoutKeys map set = Map.filterWithKey (\k _ -> k `Set.notMember` set) map
+
+asRoute :: Set.Set Tile -> (Tile, Segment) -> Route
+asRoute seen (pos, (Segment len keysNeeded keysAlong)) = 
+  Route len (Set.union seen keysAlong) pos
+
+getNext :: Graph -> Set.Set Tile -> Tile -> [Route]
+getNext graph seen curr = 
+  let possible = (graph Map.! curr) `withoutKeys` seen
+      visible = Map.filter (canTravel seen) possible
+    in map (asRoute seen) $ Map.assocs visible
+
+type Cache = Map.Map (Set.Set Tile, Tile) Int
+
+doLookup :: Graph -> Set.Set Tile -> Tile -> Cache -> (Cache, Int)
+doLookup graph keys pos cache = case Map.lookup (keys, pos) cache of
+  Just d -> (cache, d)
+  Nothing -> calculate graph keys pos cache
+    
+foldBehaviour :: Graph -> (Cache, Int) -> Route -> (Cache, Int)
+foldBehaviour graph (cache, prevBest) (Route l keys pos) = 
+  let (cache', d) = doLookup graph keys pos cache
+      new = l + d
+      best = if prevBest == -1 then new else min prevBest new
+    in (cache', best)
+
+calculate :: Graph -> Set.Set Tile -> Tile -> Cache -> (Cache, Int)
+calculate graph keys pos cache =
+  let possible = Set.delete Entrance $ Map.keysSet graph
+      next = getNext graph keys pos
+      (cache', d) = foldl (foldBehaviour graph) (cache, -1) next
+      cache'' = Map.insert (keys, pos) d cache'
+    in if keys == possible
+      then (cache, 0)
+      else (cache'', d)
+
 main = do
   args <- getArgs
   let fileName = head args
   contents <- readFile fileName
-  putStrLn contents
   let tiles = map (map toTile) $ lines contents
   let maze = listToZeroArray $ map listToZeroArray tiles
-  let startPos = head [(x, y) | x <- indices ( maze ! 0), y <- indices maze, (maze ! y ! x) == Entrance]
-  print startPos
-  let p = reverse $ path $ paths [(Route [startPos] Set.empty)] maze
-  putStrLn $ unlines $ map (\p -> show (p, deref p maze)) p
-  print $ (length p) - 1
+  let points = [(x, y) | x <- indices ( maze ! 0), y <- indices maze, interesting (maze ! y ! x)]
+  let graph = Map.fromList [ (
+                  deref from maze,
+                  Map.fromList [(deref to maze, findSegment from to maze) | to <- points, to /=from, (deref to maze) /=Entrance]
+               )
+               | from <- points
+             ]
+  print $ snd $ doLookup graph Set.empty Entrance Map.empty
